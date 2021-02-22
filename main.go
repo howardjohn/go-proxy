@@ -57,7 +57,7 @@ func proxyConn(conn *net.TCPConn) {
 	log.Println("connected to upstream ", us)
 	t0 := time.Now()
 	wg := sync.WaitGroup{}
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		splice(conn, rConn)
 		log.Println("upstream complete")
@@ -65,13 +65,10 @@ func proxyConn(conn *net.TCPConn) {
 		rConn.Close()
 		wg.Done()
 	}()
-	go func() {
-		splice(rConn, conn)
-		log.Println("downstream complete")
-		conn.Close()
-		rConn.Close()
-		wg.Done()
-	}()
+	splice(rConn, conn)
+	log.Println("downstream complete")
+	conn.Close()
+	rConn.Close()
 	wg.Wait()
 	log.Println("connection closed in ", time.Since(t0))
 }

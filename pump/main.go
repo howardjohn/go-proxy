@@ -67,6 +67,9 @@ func connect(remote string) {
 	go func() {
 		for {
 			n, err := io.Copy(io.Discard, rConn)
+			if n == 0 || err != nil {
+				log.Fatal(err)
+			}
 			log.Println("copy", n, err)
 		}
 	}()

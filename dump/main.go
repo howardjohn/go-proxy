@@ -6,21 +6,14 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
-
-	"go.uber.org/atomic"
 )
 
 var (
 	//localAddr       = flag.String("l", ":15006", "local address")
 	//monitoringAddr  = flag.String("m", ":5678", "monitoring address")
-	remoteAddr      = flag.String("r", "localhost:8080", "remote address")
-	connections     = flag.Int("c", 1, "number of connections")
-	remoteAddresses []string
+	localAddr      = flag.String("l", "localhost:8080", "local address")
 )
 
 var request = []byte("GET / HTTP/1.1\r\n" +
@@ -43,27 +36,13 @@ func main() {
 	fmt.Printf("Sending: %v\n", *remoteAddr)
 
 	//cId := atomic.AddUint64(&connectionId, 1) - 1
-	remote := remoteAddresses[0]
-	for conn := 0; conn < *connections; conn++ {
-		go connect(remote)
-	}
-	WaitSignal()
-}
-func WaitSignal() {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	<-sigs
-}
-
-var reqs = atomic.NewUint64(0)
-
-func connect(remote string) {
-	rConnr, err := net.Dial("tcp", remote)
+	us := remoteAddresses[0]
+	rConnr, err := net.Dial("tcp", us)
 	if err != nil {
 		panic(err)
 	}
 	rConn := rConnr.(*net.TCPConn)
-	log.Println("connected to upstream ", remote)
+	log.Println("connected to upstream ", us)
 	go func() {
 		for {
 			n, err := io.Copy(io.Discard, rConn)
@@ -71,13 +50,15 @@ func connect(remote string) {
 		}
 	}()
 	start := time.Now()
+	reqs := 0
 	for {
 		n, err := rConn.Write(requests)
 		if err != nil {
 			log.Fatal(err)
 		}
-		nr := reqs.Add(512) // Each write has 512 requests
-		log.Println(n, err, reqs, float64(nr)/time.Since(start).Seconds())
+		reqs++
+		log.Println(n, err, reqs, 512*float64(reqs)/time.Since(start).Seconds())
+		//time.Sleep(time.Millisecond*10)
 	}
 }
 func nop(...interface{}) {}

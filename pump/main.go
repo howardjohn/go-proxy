@@ -65,7 +65,7 @@ var blackHolePool = sync.Pool{
 	},
 }
 
-func DiscardReadFrom(r io.Reader) (n int64, err error) {
+func DiscardReadFrom(r *net.TCPConn) (n int64, err error) {
 	bufp := blackHolePool.Get().(*[]byte)
 	readSize := 0
 	reads := 0
@@ -75,7 +75,7 @@ func DiscardReadFrom(r io.Reader) (n int64, err error) {
 		n += int64(readSize)
 		reads++
 		if reads%1000 == 0 {
-			log.Println("Completed read", reads, "rate", uint64(float64(reads)/time.Since(t0).Seconds()), "per second", ByteCount(n), "total")
+			log.Println(r.LocalAddr().String(), "Completed read", reads, "rate", uint64(float64(reads)/time.Since(t0).Seconds()), "per second", ByteCount(n), "total")
 		}
 		if err != nil {
 			blackHolePool.Put(bufp)
@@ -93,7 +93,8 @@ func connect(remote string) {
 		panic(err)
 	}
 	rConn := rConnr.(*net.TCPConn)
-	log.Println("connected to upstream ", remote)
+	id := rConn.LocalAddr().String()
+	log.Println(id, "connected to upstream ", remote)
 	go func() {
 		for {
 			n, err := DiscardReadFrom(rConn)
@@ -112,7 +113,7 @@ func connect(remote string) {
 		nr := reqs.Add(1)
 		if nr%1000 == 0 {
 			// Each write has 512 requests
-			log.Println("Completed request", reqs, "rate", uint64(float64(nr*512)/time.Since(start).Seconds()), "per second")
+			log.Println(id, "Completed request", reqs, "rate", uint64(float64(nr*512)/time.Since(start).Seconds()), "per second")
 		}
 	}
 }

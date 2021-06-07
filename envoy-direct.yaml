@@ -20,23 +20,10 @@ static_resources:
               domains: ["*"]
               routes:
               - match: { prefix: "/" }
-                route: { cluster: upstream }
+                direct_response:
+                  status: 200
           http_filters:
           - name: envoy.filters.http.router
-  clusters:
-  - name: upstream
-    connect_timeout: 0.25s
-    type: static
-    lb_policy: round_robin
-    load_assignment:
-      cluster_name: upstream
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address:
-                address: 127.0.0.1
-                port_value: 8080
 admin:
   access_log_path: "/dev/null"
   profile_path: "/tmp/envoy.prof"

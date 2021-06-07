@@ -2,12 +2,11 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"io"
 	"log"
 	"net"
-	"strings"
 	"time"
+
+	"go.uber.org/atomic"
 )
 
 var (
@@ -16,11 +15,9 @@ var (
 	localAddr      = flag.String("l", "localhost:8080", "local address")
 )
 
-var request = []byte("GET / HTTP/1.1\r\n" +
-	"Host: localhost\r\n" +
+var response = []byte("HTTP/1.1 200 OK\r\n" +
+	"content-length: 0\r\n" +
 	"\r\n")
-
-var requests = repeat(request, 512)
 
 func repeat(bytes []byte, i int) []byte {
 	ret := make([]byte, 0, len(bytes)*i)
@@ -32,33 +29,49 @@ func repeat(bytes []byte, i int) []byte {
 
 func main() {
 	flag.Parse()
-	remoteAddresses = strings.Split(*remoteAddr, ",")
-	fmt.Printf("Sending: %v\n", *remoteAddr)
-
-	//cId := atomic.AddUint64(&connectionId, 1) - 1
-	us := remoteAddresses[0]
-	rConnr, err := net.Dial("tcp", us)
+	listener, err := net.Listen("tcp", *localAddr)
 	if err != nil {
 		panic(err)
 	}
-	rConn := rConnr.(*net.TCPConn)
-	log.Println("connected to upstream ", us)
-	go func() {
-		for {
-			n, err := io.Copy(io.Discard, rConn)
-			log.Println("copy", n, err)
-		}
-	}()
-	start := time.Now()
-	reqs := 0
+	first := true
 	for {
-		n, err := rConn.Write(requests)
+		conn, err := listener.Accept()
 		if err != nil {
-			log.Fatal(err)
+			panic(err)
 		}
-		reqs++
-		log.Println(n, err, reqs, 512*float64(reqs)/time.Since(start).Seconds())
-		//time.Sleep(time.Millisecond*10)
+		if first {
+			progStart = time.Now()
+			first = false
+		}
+		log.Println("accepted connection")
+		go proxyConn(conn.(*net.TCPConn))
 	}
 }
-func nop(...interface{}) {}
+
+var total = atomic.NewUint64(0)
+var progStart = time.Now()
+
+func proxyConn(conn *net.TCPConn) {
+	buf := make([]byte, 1024)
+	t0 := time.Now()
+	reqs := 0
+	for {
+		_, err := conn.Read(buf)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		_, err = conn.Write(response)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		greqs := total.Add(1)
+		reqs++
+		if reqs % 1000 == 0 {
+			log.Println("Completed request", reqs, "rate", uint64(float64(reqs)/time.Since(t0).Seconds()), "per second",
+				uint64(float64(greqs)/time.Since(progStart).Seconds()), "global per second",
+				)
+		}
+	}
+}

@@ -37,6 +37,7 @@ static_resources:
                 port_value: 8080
 admin:
   access_log_path: "/dev/null"
+  profile_path: "/tmp/envoy.prof"
   address:
     socket_address:
       address: 0.0.0.0

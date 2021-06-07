@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,6 +58,35 @@ func WaitSignal() {
 
 var reqs = atomic.NewUint64(0)
 
+var blackHolePool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 8192)
+		return &b
+	},
+}
+
+func DiscardReadFrom(r io.Reader) (n int64, err error) {
+	bufp := blackHolePool.Get().(*[]byte)
+	readSize := 0
+	reads := 0
+	t0 := time.Now()
+	for {
+		readSize, err = r.Read(*bufp)
+		n += int64(readSize)
+		reads++
+		if reads%1000 == 0 {
+			log.Println("Completed read", reads, "rate", uint64(float64(reads)/time.Since(t0).Seconds()), "per second", ByteCount(n), "total")
+		}
+		if err != nil {
+			blackHolePool.Put(bufp)
+			if err == io.EOF {
+				return n, nil
+			}
+			return
+		}
+	}
+}
+
 func connect(remote string) {
 	rConnr, err := net.Dial("tcp", remote)
 	if err != nil {
@@ -66,7 +96,7 @@ func connect(remote string) {
 	log.Println("connected to upstream ", remote)
 	go func() {
 		for {
-			n, err := io.Copy(io.Discard, rConn)
+			n, err := DiscardReadFrom(rConn)
 			if n == 0 || err != nil {
 				log.Fatal(err)
 			}
@@ -75,12 +105,31 @@ func connect(remote string) {
 	}()
 	start := time.Now()
 	for {
-		n, err := rConn.Write(requests)
+		_, err := rConn.Write(requests)
 		if err != nil {
 			log.Fatal(err)
 		}
-		nr := reqs.Add(512) // Each write has 512 requests
-		log.Println(n, err, reqs, float64(nr)/time.Since(start).Seconds())
+		nr := reqs.Add(1)
+		if nr%1000 == 0 {
+			// Each write has 512 requests
+			log.Println("Completed request", reqs, "rate", uint64(float64(nr*512)/time.Since(start).Seconds()), "per second")
+		}
 	}
 }
 func nop(...interface{}) {}
+
+// ByteCount returns a human readable byte format
+// Inspired by https://yourbasic.org/golang/formatting-byte-size-to-human-readable-format/
+func ByteCount(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB",
+		float64(b)/float64(div), "kMGTPE"[exp])
+}

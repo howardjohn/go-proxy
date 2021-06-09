@@ -21,22 +21,17 @@ struct bpf_map_def SEC("maps") sock_map = {
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#define bpf_debug(fmt, ...) \
-	({                                                                     \
-		char ____fmt[] = fmt;                                          \
-	})
-		// bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);     \
 
-SEC("prog_parser")
+SEC("sk_skb/stream_parser")
 int _prog_parser(struct __sk_buff *skb) { return skb->len; }
 
-SEC("prog_verdict")
+SEC("sk_skb/stream_verdict")
 int _prog_verdict(struct __sk_buff *skb)
 {
 	bpf_skb_pull_data(skb, skb->len);
 	void *data = (void *)(long)skb->data;
 	void *data_end = (void *)(long)skb->data_end;
-	bpf_debug("got data len %d: %s", data_end - data, data);
+//	bpf_debug("got data len %d: %s", data_end - data, data);
 	uint64_t f1 = 0x0a0d0a0d30203a68;
 	uint64_t f2 = 0x74676e656c2d746e;
 	uint64_t f3 = 0x65746e6f630a0d4b;
@@ -47,11 +42,10 @@ int _prog_verdict(struct __sk_buff *skb)
 
 	// if (data + sizeof(f) > data_end) {
 	signed int delta = size - (skb->data_end - skb->data);
-	bpf_debug("adjust by %d", delta);
+//	bpf_debug("adjust by %d", delta);
 	int rerr = bpf_skb_adjust_room(skb, delta, 0, 0);
 	if (rerr != 0) {
-		bpf_debug("failed to ajust room: %d %d %d", rerr,
-			   skb->data_end - skb->data, delta);
+//		bpf_debug("failed to ajust room: %d %d %d", rerr, skb->data_end - skb->data, delta);
 		return SK_DROP;
 	}
 
@@ -66,7 +60,7 @@ int _prog_verdict(struct __sk_buff *skb)
 	bpf_skb_store_bytes(skb, 16, &f3, sizeof(f3), 0);
 	bpf_skb_store_bytes(skb, 8, &f4, sizeof(f4), 0);
 	bpf_skb_store_bytes(skb, 0, &f5, sizeof(f5), 0);
-	bpf_debug("got updated data len %d: %s", skb->len, data);
+//	bpf_debug("got updated data len %d: %s", skb->len, data);
 
 	uint32_t idx = 0;
 	int err = bpf_sk_redirect_map(skb, &sock_map, idx, 0);

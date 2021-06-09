@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -48,11 +49,31 @@ func main() {
 
 	listener, err := net.Listen("tcp", *localAddr)
 	fatal(err)
+	go func() {
+		for {
+			var (
+				key     interface{}
+				value   interface{}
+				entries = objs.SockMap.Iterate()
+			)
+
+			for entries.Next(&key, &value) {
+				// Order of keys is non-deterministic due to randomized map seed
+				fmt.Printf("key: %v, value: %v\n", key, value)
+			}
+			fmt.Println(objs.SockMap.Info())
+			time.Sleep(time.Second)
+		}
+	}()
 	for {
 		conn, err := listener.Accept()
 		fatal(err)
 		tcpConn := conn.(*net.TCPConn)
 		fatal(tcpConn.SetNoDelay(true))
+		// There is a bug in sockmap which prevents it from
+		// working right when snd buffer is full. Set it to
+		// gigantic value.
+		fatal(tcpConn.SetWriteBuffer(32 * 1024 * 1024))
 		fd, err := tcpConn.File()
 		fatal(err)
 

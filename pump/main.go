@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,9 +20,10 @@ import (
 
 var (
 	//localAddr       = flag.String("l", ":15006", "local address")
-	//monitoringAddr  = flag.String("m", ":5678", "monitoring address")
+	monitoringAddr  = flag.String("m", ":5678", "monitoring address")
 	remoteAddr      = flag.String("r", "localhost:8080", "remote address")
 	connections     = flag.Int("c", 1, "number of connections")
+	disablePipeline = flag.Bool("s", false, "disable pipelining")
 	remoteAddresses []string
 )
 
@@ -42,8 +45,7 @@ func main() {
 	flag.Parse()
 	remoteAddresses = strings.Split(*remoteAddr, ",")
 	fmt.Printf("Sending: %v\n", *remoteAddr)
-
-	//cId := atomic.AddUint64(&connectionId, 1) - 1
+	go StartMonitoring()
 	remote := remoteAddresses[0]
 	for conn := 0; conn < *connections; conn++ {
 		go connect(remote)
@@ -95,6 +97,35 @@ func connect(remote string) {
 	rConn := rConnr.(*net.TCPConn)
 	id := rConn.LocalAddr().String()
 	log.Println(id, "connected to upstream ", remote)
+	start := time.Now()
+	if *disablePipeline {
+		bufLen := 1024
+		localReqs := 0
+		for {
+			_, err = rConn.Write(request)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			buf := make([]byte, bufLen)
+			n, err := rConn.Read(buf)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			if n == bufLen {
+				log.Println("warning: filled up buffer")
+			}
+			greqs := reqs.Add(1)
+			localReqs++
+			if localReqs%1000 == 0 {
+				log.Println("Completed request", localReqs, "rate", uint64(float64(localReqs)/time.Since(start).Seconds()), "per second",
+					uint64(float64(greqs)/time.Since(start).Seconds()), "global per second",
+				)
+			}
+		}
+	}
+
 	go func() {
 		for {
 			n, err := DiscardReadFrom(rConn)
@@ -104,7 +135,6 @@ func connect(remote string) {
 			log.Println("copy", n, err)
 		}
 	}()
-	start := time.Now()
 	for {
 		_, err := rConn.Write(requests)
 		if err != nil {
@@ -133,4 +163,20 @@ func ByteCount(b int64) string {
 	}
 	return fmt.Sprintf("%.1f%cB",
 		float64(b)/float64(div), "kMGTPE"[exp])
+}
+
+func StartMonitoring() {
+	// TODO add metrics
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	server := &http.Server{
+		Handler: mux,
+		Addr:    *monitoringAddr,
+	}
+	server.ListenAndServe()
+	server.Close()
 }

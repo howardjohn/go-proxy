@@ -1,0 +1,21 @@
+global
+   strict-limits  # refuse to start if insufficient FDs/memory
+   # add some process-wide tuning here if required
+
+   # A stats socket may be added to check live metrics if the load generators
+   # do not report them.
+   #    stats socket /tmp/haproxy.sock level admin
+   #    stats timeout 1h
+
+defaults
+   mode http
+   balance random      # power-of-two-choices
+   timeout client 60s
+   timeout server 60s
+   timeout connect 1s
+
+listen p
+   # this is the address and port we'll listen to, the ones to aim the
+   # load generators at
+   bind :8080
+   http-request return status 200

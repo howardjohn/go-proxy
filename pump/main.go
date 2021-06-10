@@ -97,6 +97,8 @@ func connect(remote string) {
 	rConn := rConnr.(*net.TCPConn)
 	id := rConn.LocalAddr().String()
 	log.Println(id, "connected to upstream ", remote)
+
+	// Delay for bpf server bug
 	time.Sleep(time.Millisecond * 500)
 	start := time.Now()
 	if *disablePipeline {

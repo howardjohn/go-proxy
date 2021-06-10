@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -73,8 +74,26 @@ func main() {
 	}
 }
 
+var response = []byte("HTTP/1.1 200 OK\r\n" +
+	"content-length: 0\r\n" +
+	"\r\n")
+
 func proxyConn(conn *net.TCPConn) {
-	// TODO SO_SNDBUF
+	buf := make([]byte, 1024)
+	t0 := time.Now()
+	reqs := 0
+	for {
+		_, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		_, err = conn.Write(response)
+		if err != nil {
+			return
+		}
+		reqs++
+		log.Println("Completed userspace request", reqs, "rate", uint64(float64(reqs)/time.Since(t0).Seconds()), "per second")
+	}
 }
 
 func fatal(err error) {

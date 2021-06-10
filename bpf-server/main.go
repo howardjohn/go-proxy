@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
+	"strconv"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -49,26 +49,16 @@ func main() {
 
 	listener, err := net.Listen("tcp", *localAddr)
 	fatal(err)
-	go func() {
-		for {
-			var (
-				key     interface{}
-				value   interface{}
-				entries = objs.SockMap.Iterate()
-			)
 
-			for entries.Next(&key, &value) {
-				// Order of keys is non-deterministic due to randomized map seed
-				fmt.Printf("key: %v, value: %v\n", key, value)
-			}
-			fmt.Println(objs.SockMap.Info())
-			time.Sleep(time.Second)
-		}
-	}()
 	for {
 		conn, err := listener.Accept()
 		fatal(err)
 		tcpConn := conn.(*net.TCPConn)
+		remoteAddr := tcpConn.RemoteAddr().String()
+		_, port, err := net.SplitHostPort(remoteAddr)
+		fatal(err)
+		portNumber, err := strconv.Atoi(port)
+		fatal(err)
 		fatal(tcpConn.SetNoDelay(true))
 		// There is a bug in sockmap which prevents it from
 		// working right when snd buffer is full. Set it to
@@ -77,8 +67,8 @@ func main() {
 		fd, err := tcpConn.File()
 		fatal(err)
 
-		fatal(objs.SockMap.Update(uint32(0), uint32(fd.Fd()), ebpf.UpdateAny))
-		log.Println("accepted connection")
+		log.Println("accepted connection from", uint32(portNumber))
+		fatal(objs.SockMap.Update(uint32(portNumber), uint32(fd.Fd()), ebpf.UpdateAny))
 		go proxyConn(tcpConn)
 	}
 }

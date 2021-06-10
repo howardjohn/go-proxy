@@ -97,6 +97,7 @@ func connect(remote string) {
 	rConn := rConnr.(*net.TCPConn)
 	id := rConn.LocalAddr().String()
 	log.Println(id, "connected to upstream ", remote)
+	time.Sleep(time.Millisecond * 500)
 	start := time.Now()
 	if *disablePipeline {
 		bufLen := 1024

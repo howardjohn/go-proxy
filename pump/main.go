@@ -30,6 +30,7 @@ var (
 	connections     = flag.Int("c", 1, "number of connections")
 	disablePipeline = flag.Bool("s", false, "disable pipelining")
 	useEbpf         = flag.Bool("b", false, "drain with ebpf")
+	serverPipelines = flag.Bool("server-pipelines", false, "should be set to true if the server supports pipelining, to get accurate metrics")
 	remoteAddresses []string
 )
 
@@ -38,6 +39,7 @@ var request = []byte("GET / HTTP/1.1\r\n" +
 	"\r\n")
 
 var requests = repeat(request, 512)
+var jumbo = repeat(request, 4194304)
 
 func repeat(bytes []byte, i int) []byte {
 	ret := make([]byte, 0, len(bytes)*i)
@@ -49,16 +51,20 @@ func repeat(bytes []byte, i int) []byte {
 
 func main() {
 	flag.Parse()
+	if len(flag.Args()) > 0 {
+		fatal(fmt.Errorf("unexpected args %v", flag.Args()))
+	}
 	remoteAddresses = strings.Split(*remoteAddr, ",")
 	log.Printf("Sending to %v, with %d connections, pipeline=%v, ebpf=%v", *remoteAddr, *connections, !*disablePipeline, *useEbpf)
 	go StartMonitoring()
 
 	remote := remoteAddresses[0]
 	if *useEbpf {
-		sockmap, clean := load()
+		sockmap, counter, clean := load()
 		defer clean()
 		for conn := 0; conn < *connections; conn++ {
-			go connectEbpf(remote, sockmap)
+			go connectEbpf(remote, sockmap, counter)
+			counter = nil
 		}
 	} else {
 		for conn := 0; conn < *connections; conn++ {
@@ -69,7 +75,7 @@ func main() {
 	WaitSignal()
 }
 
-func connectEbpf(remote string, sockmap *ebpf.Map) {
+func connectEbpf(remote string, sockmap *ebpf.Map, counter *ebpf.Map) {
 	rConnr, err := net.Dial("tcp", remote)
 	if err != nil {
 		panic(err)
@@ -96,9 +102,27 @@ func connectEbpf(remote string, sockmap *ebpf.Map) {
 	toSend := request
 	multiplier := 1
 	if !*disablePipeline {
-		toSend = requests
-		multiplier = 512
+		toSend = jumbo
+		multiplier = 4194304
 	}
+
+	if counter != nil {
+		go func() {
+			start := time.Now()
+			for {
+				var v uint64
+				err := counter.Lookup(uint64(0), &v)
+				if err != nil {
+					log.Println("failed to extract request count", err)
+					time.Sleep(time.Second)
+					continue
+				}
+				log.Println("Completed request", v, "rate", uint64(float64(v)/time.Since(start).Seconds()), "per second")
+				time.Sleep(time.Second)
+			}
+		}()
+	}
+
 	for {
 		_, err = rConn.Write(toSend)
 		if err != nil {
@@ -109,7 +133,7 @@ func connectEbpf(remote string, sockmap *ebpf.Map) {
 		// Eventually we will fill the write buffer, causing write to block.
 		greqs := reqs.Add(1)
 		localReqs++
-		if localReqs%1000 == 0 {
+		if localReqs%1000 == 0 && !*serverPipelines {
 			log.Println("Completed request", localReqs, "rate", uint64(float64(localReqs*multiplier)/time.Since(start).Seconds()), "per second",
 				uint64(float64(greqs*uint64(multiplier))/time.Since(start).Seconds()), "global per second",
 			)
@@ -254,14 +278,14 @@ func connect(remote string) {
 		}
 	}()
 	for {
-		_, err := rConn.Write(requests)
+		_, err := rConn.Write(jumbo)
 		if err != nil {
 			log.Fatal(err)
 		}
 		nr := reqs.Add(1)
 		if nr%1000 == 0 {
 			// Each write has 512 requests
-			log.Println(id, "Completed request", reqs, "rate", uint64(float64(nr*512)/time.Since(start).Seconds()), "per second")
+			log.Println(id, "Completed request", reqs, "rate", uint64(float64(nr*4194304)/time.Since(start).Seconds()), "per second")
 		}
 	}
 }
@@ -299,13 +323,13 @@ func StartMonitoring() {
 	server.Close()
 }
 
-func load() (*ebpf.Map, func() error) {
+func load() (*ebpf.Map, *ebpf.Map, func() error) {
 	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
 		Cur: unix.RLIM_INFINITY,
 		Max: unix.RLIM_INFINITY,
 	}); err != nil {
 		log.Printf("failed to set temporary rlimit: %v", err)
-		return nil, nil
+		return nil, nil, nil
 	}
 	var objs serverObjects
 	if err := loadServerObjects(&objs, nil); err != nil {
@@ -323,7 +347,7 @@ func load() (*ebpf.Map, func() error) {
 		Program: objs.serverPrograms.ProgVerdict,
 		Attach:  ebpf.AttachSkSKBStreamVerdict,
 	}))
-	return objs.SockMap, objs.Close
+	return objs.SockMap, objs.Counter, objs.Close
 }
 
 func fatal(err error) {

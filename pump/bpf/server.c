@@ -13,6 +13,13 @@ struct bpf_map_def SEC("maps") sock_map = {
 	.max_entries = 65535,
 };
 
+struct bpf_map_def SEC("maps") counter = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(__u64),
+	.value_size = sizeof(__u64),
+	.max_entries = 32,
+};
+
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
@@ -24,13 +31,17 @@ int _prog_parser(struct __sk_buff *skb) { return skb->len; }
 SEC("sk_skb/stream_verdict")
 int _prog_verdict(struct __sk_buff *skb)
 {
-  return SK_DROP;
-  __u32 port = __constant_ntohl(skb->remote_port);
-	bpf_skb_pull_data(skb, skb->len);
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
-	bpf_printk("got stream %s", data);
-	return SK_PASS;
+  __u64 zero = 0, *val;
+  __u64 key = 0;
+	val = bpf_map_lookup_elem(&counter, &key);
+	if (!val) {
+		bpf_map_update_elem(&counter, &key, &zero, BPF_NOEXIST);
+		val = bpf_map_lookup_elem(&counter, &key);
+		if (!val)
+			return SK_DROP;
+	}
+	(*val) += 1;
+	return SK_DROP;
 }
 
 char _license[4] SEC("license") = "GPL";

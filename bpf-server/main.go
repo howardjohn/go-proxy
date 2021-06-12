@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -15,26 +14,20 @@ import (
 
 var localAddr = flag.String("l", "localhost:8080", "local address")
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go server bpf/server.c
-func main() {
-	flag.Parse()
-	// Increase the rlimit of the current process to provide sufficient space
-	// for locking memory for the eBPF map.
+func load() (*ebpf.Map, func() error) {
 	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
 		Cur: unix.RLIM_INFINITY,
 		Max: unix.RLIM_INFINITY,
 	}); err != nil {
 		log.Printf("failed to set temporary rlimit: %v", err)
-		return
+		return nil, nil
 	}
 	var objs serverObjects
 	if err := loadServerObjects(&objs, nil); err != nil {
 		panic("Can't load objects: " + err.Error())
 	}
-	defer objs.Close()
 
 	// Do something useful with the program.
-	fmt.Println(objs)
 	fatal(link.RawAttachProgram(link.RawAttachProgramOptions{
 		Target:  objs.SockMap.FD(),
 		Program: objs.serverPrograms.ProgParser,
@@ -45,9 +38,19 @@ func main() {
 		Program: objs.serverPrograms.ProgVerdict,
 		Attach:  ebpf.AttachSkSKBStreamVerdict,
 	}))
+	return objs.SockMap, objs.Close
+}
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel server bpf/server.c
+func main() {
+	flag.Parse()
+
+	sockmap, clean := load()
+	defer clean()
 
 	listener, err := net.Listen("tcp", *localAddr)
 	fatal(err)
+	log.Println("Listening on", listener.Addr().String())
 
 	for {
 		conn, err := listener.Accept()
@@ -67,7 +70,7 @@ func main() {
 		fatal(err)
 
 		log.Println("accepted connection from", uint32(portNumber))
-		fatal(objs.SockMap.Update(uint32(portNumber), uint32(fd.Fd()), ebpf.UpdateAny))
+		fatal(sockmap.Update(uint32(portNumber), uint32(fd.Fd()), ebpf.UpdateAny))
 		go proxyConn(tcpConn)
 	}
 }

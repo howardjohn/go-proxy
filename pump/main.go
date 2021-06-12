@@ -1,5 +1,6 @@
 package main
 
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel server bpf/server.c
 import (
 	"flag"
 	"fmt"
@@ -10,20 +11,25 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
 	"go.uber.org/atomic"
+	"golang.org/x/sys/unix"
 )
 
 var (
-	//localAddr       = flag.String("l", ":15006", "local address")
+	// localAddr       = flag.String("l", ":15006", "local address")
 	monitoringAddr  = flag.String("m", ":5678", "monitoring address")
 	remoteAddr      = flag.String("r", "localhost:8080", "remote address")
 	connections     = flag.Int("c", 1, "number of connections")
 	disablePipeline = flag.Bool("s", false, "disable pipelining")
+	useEbpf         = flag.Bool("b", false, "drain with ebpf")
 	remoteAddresses []string
 )
 
@@ -44,14 +50,73 @@ func repeat(bytes []byte, i int) []byte {
 func main() {
 	flag.Parse()
 	remoteAddresses = strings.Split(*remoteAddr, ",")
-	fmt.Printf("Sending: %v\n", *remoteAddr)
+	log.Printf("Sending to %v, with %d connections, pipeline=%v, ebpf=%v", *remoteAddr, *connections, !*disablePipeline, *useEbpf)
 	go StartMonitoring()
+
 	remote := remoteAddresses[0]
-	for conn := 0; conn < *connections; conn++ {
-		go connect(remote)
+	if *useEbpf {
+		sockmap, clean := load()
+		defer clean()
+		for conn := 0; conn < *connections; conn++ {
+			go connectEbpf(remote, sockmap)
+		}
+	} else {
+		for conn := 0; conn < *connections; conn++ {
+			go connect(remote)
+		}
 	}
+
 	WaitSignal()
 }
+
+func connectEbpf(remote string, sockmap *ebpf.Map) {
+	rConnr, err := net.Dial("tcp", remote)
+	if err != nil {
+		panic(err)
+	}
+
+	rConn := rConnr.(*net.TCPConn)
+	id := rConn.LocalAddr().String()
+	log.Println(id, "connected to upstream ", remote)
+
+	_, port, err := net.SplitHostPort(rConn.LocalAddr().String())
+	fatal(err)
+	portNumber, err := strconv.Atoi(port)
+	fatal(err)
+
+	file, err := rConn.File()
+	fatal(err)
+
+	fatal(sockmap.Update(uint32(portNumber), uint32(file.Fd()), ebpf.UpdateAny))
+	// Delay for bpf server bug
+	time.Sleep(time.Millisecond * 500)
+
+	start := time.Now()
+	localReqs := 0
+	toSend := request
+	multiplier := 1
+	if !*disablePipeline {
+		toSend = requests
+		multiplier = 512
+	}
+	for {
+		_, err = rConn.Write(toSend)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		// No need to read the request, ebpf code will just drop it
+		// Eventually we will fill the write buffer, causing write to block.
+		greqs := reqs.Add(1)
+		localReqs++
+		if localReqs%1000 == 0 {
+			log.Println("Completed request", localReqs, "rate", uint64(float64(localReqs*multiplier)/time.Since(start).Seconds()), "per second",
+				uint64(float64(greqs*uint64(multiplier))/time.Since(start).Seconds()), "global per second",
+			)
+		}
+	}
+}
+
 func WaitSignal() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -181,7 +246,7 @@ func connect(remote string) {
 	go func() {
 		for {
 			n, err := DiscardReadFrom(rConn)
-			//n, err := SpliceDiscard(rConn)
+			// n, err := SpliceDiscard(rConn)
 			if n == 0 || err != nil {
 				log.Fatal(err)
 			}
@@ -232,4 +297,37 @@ func StartMonitoring() {
 	}
 	server.ListenAndServe()
 	server.Close()
+}
+
+func load() (*ebpf.Map, func() error) {
+	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
+		Cur: unix.RLIM_INFINITY,
+		Max: unix.RLIM_INFINITY,
+	}); err != nil {
+		log.Printf("failed to set temporary rlimit: %v", err)
+		return nil, nil
+	}
+	var objs serverObjects
+	if err := loadServerObjects(&objs, nil); err != nil {
+		panic("Can't load objects: " + err.Error())
+	}
+
+	// Do something useful with the program.
+	fatal(link.RawAttachProgram(link.RawAttachProgramOptions{
+		Target:  objs.SockMap.FD(),
+		Program: objs.serverPrograms.ProgParser,
+		Attach:  ebpf.AttachSkSKBStreamParser,
+	}))
+	fatal(link.RawAttachProgram(link.RawAttachProgramOptions{
+		Target:  objs.SockMap.FD(),
+		Program: objs.serverPrograms.ProgVerdict,
+		Attach:  ebpf.AttachSkSKBStreamVerdict,
+	}))
+	return objs.SockMap, objs.Close
+}
+
+func fatal(err error) {
+	if err != nil {
+		panic(err.Error())
+	}
 }

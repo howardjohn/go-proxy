@@ -67,6 +67,52 @@ var blackHolePool = sync.Pool{
 	},
 }
 
+// Since Linux 2.6.11, the pipe capacity is 65536 bytes.
+// TODO detect real size from https://github.com/hanwen/go-fuse/blob/v1.0.0/splice/splice.go#L72?
+const DefaultPipeSize = 4 << 20
+
+const _SPLICE_F_NONBLOCK = 0x2
+
+func SpliceDiscard(conn *net.TCPConn) (n int64, err error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return 0, err
+	}
+
+	devNull, err := syscall.Open("/dev/null", os.O_WRONLY, 0)
+	if err != nil {
+		return 0, err
+	}
+
+	connFile, err := conn.File()
+	if err != nil {
+		return 0, err
+	}
+	connFd := int(connFile.Fd())
+	rfd := int(r.Fd())
+	wfd := int(w.Fd())
+	reads := 0
+	t0 := time.Now()
+	for {
+		readSize, err := syscall.Splice(connFd, nil, wfd, nil, DefaultPipeSize, _SPLICE_F_NONBLOCK)
+		n += readSize
+		if err != nil {
+			return n, fmt.Errorf("splice to pipe: %v", err)
+		}
+		_, err = syscall.Splice(rfd, nil, devNull, nil, DefaultPipeSize, _SPLICE_F_NONBLOCK)
+		if err != nil {
+			return n, fmt.Errorf("splice from pipe: %v", err)
+		}
+		reads++
+		if reads%1000 == 0 {
+			log.Println(conn.LocalAddr().String(), "Completed read", reads,
+				"rate", uint64(float64(reads)/time.Since(t0).Seconds()), "per second",
+				ByteCount(n), "total",
+				ByteCount(int64(float64(n)/time.Since(t0).Seconds())), "per second")
+		}
+	}
+}
+
 func DiscardReadFrom(r *net.TCPConn) (n int64, err error) {
 	bufp := blackHolePool.Get().(*[]byte)
 	readSize := 0
@@ -77,7 +123,10 @@ func DiscardReadFrom(r *net.TCPConn) (n int64, err error) {
 		n += int64(readSize)
 		reads++
 		if reads%1000 == 0 {
-			log.Println(r.LocalAddr().String(), "Completed read", reads, "rate", uint64(float64(reads)/time.Since(t0).Seconds()), "per second", ByteCount(n), "total")
+			log.Println(r.LocalAddr().String(), "Completed read", reads,
+				"rate", uint64(float64(reads)/time.Since(t0).Seconds()), "per second",
+				ByteCount(n), "total",
+				ByteCount(int64(float64(n)/time.Since(t0).Seconds())), "per second")
 		}
 		if err != nil {
 			blackHolePool.Put(bufp)
@@ -132,6 +181,7 @@ func connect(remote string) {
 	go func() {
 		for {
 			n, err := DiscardReadFrom(rConn)
+			//n, err := SpliceDiscard(rConn)
 			if n == 0 || err != nil {
 				log.Fatal(err)
 			}

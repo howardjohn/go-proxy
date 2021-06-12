@@ -13,9 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var (
-	localAddr = flag.String("l", "localhost:8080", "local address")
-)
+var localAddr = flag.String("l", "localhost:8080", "local address")
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go server bpf/server.c
 func main() {

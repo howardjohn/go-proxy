@@ -1,0 +1,259 @@
+
+statsConfig:
+  statsMatcher:
+    inclusionList:
+      patterns:
+      - prefix: reporter=
+      - prefix: cluster_manager
+      - prefix: listener_manager
+      - prefix: server
+      - prefix: cluster.xds-grpc
+      - prefix: wasm
+      - prefix: component
+  statsTags:
+  - regex: ^cluster\.((.+?(\..+?\.svc\.cluster\.local)?)\.)
+    tagName: cluster_name
+  - regex: ^tcp\.((.*?)\.)\w+?$
+    tagName: tcp_prefix
+  - regex: (response_code=\.=(.+?);\.;)|_rq(_(\.d{3}))$
+    tagName: response_code
+  - regex: _rq(_(\dxx))$
+    tagName: response_code_class
+  - regex: ^listener(?=\.).*?\.http\.(((?:[_.[:digit:]]*|[_\[\]aAbBcCdDeEfF[:digit:]]*))\.)
+    tagName: http_conn_manager_listener_prefix
+  - regex: ^http\.(((?:[_.[:digit:]]*|[_\[\]aAbBcCdDeEfF[:digit:]]*))\.)
+    tagName: http_conn_manager_prefix
+  - regex: ^listener\.(((?:[_.[:digit:]]*|[_\[\]aAbBcCdDeEfF[:digit:]]*))\.)
+    tagName: listener_address
+  - regex: ^mongo\.(.+?)\.(collection|cmd|cx_|op_|delays_|decoding_)(.*?)$
+    tagName: mongo_prefix
+  - regex: (reporter=\.=(.*?);\.;)
+    tagName: reporter
+  - regex: (source_namespace=\.=(.*?);\.;)
+    tagName: source_namespace
+  - regex: (source_workload=\.=(.*?);\.;)
+    tagName: source_workload
+  - regex: (source_workload_namespace=\.=(.*?);\.;)
+    tagName: source_workload_namespace
+  - regex: (source_principal=\.=(.*?);\.;)
+    tagName: source_principal
+  - regex: (source_app=\.=(.*?);\.;)
+    tagName: source_app
+  - regex: (source_version=\.=(.*?);\.;)
+    tagName: source_version
+  - regex: (source_cluster=\.=(.*?);\.;)
+    tagName: source_cluster
+  - regex: (destination_namespace=\.=(.*?);\.;)
+    tagName: destination_namespace
+  - regex: (destination_workload=\.=(.*?);\.;)
+    tagName: destination_workload
+  - regex: (destination_workload_namespace=\.=(.*?);\.;)
+    tagName: destination_workload_namespace
+  - regex: (destination_principal=\.=(.*?);\.;)
+    tagName: destination_principal
+  - regex: (destination_app=\.=(.*?);\.;)
+    tagName: destination_app
+  - regex: (destination_version=\.=(.*?);\.;)
+    tagName: destination_version
+  - regex: (destination_service=\.=(.*?);\.;)
+    tagName: destination_service
+  - regex: (destination_service_name=\.=(.*?);\.;)
+    tagName: destination_service_name
+  - regex: (destination_service_namespace=\.=(.*?);\.;)
+    tagName: destination_service_namespace
+  - regex: (destination_port=\.=(.*?);\.;)
+    tagName: destination_port
+  - regex: (destination_cluster=\.=(.*?);\.;)
+    tagName: destination_cluster
+  - regex: (request_protocol=\.=(.*?);\.;)
+    tagName: request_protocol
+  - regex: (request_operation=\.=(.*?);\.;)
+    tagName: request_operation
+  - regex: (request_host=\.=(.*?);\.;)
+    tagName: request_host
+  - regex: (response_flags=\.=(.*?);\.;)
+    tagName: response_flags
+  - regex: (grpc_response_status=\.=(.*?);\.;)
+    tagName: grpc_response_status
+  - regex: (connection_security_policy=\.=(.*?);\.;)
+    tagName: connection_security_policy
+  - regex: (permissive_response_code=\.=(.*?);\.;)
+    tagName: permissive_response_code
+  - regex: (permissive_response_policyid=\.=(.*?);\.;)
+    tagName: permissive_response_policyid
+  - regex: (source_canonical_service=\.=(.*?);\.;)
+    tagName: source_canonical_service
+  - regex: (destination_canonical_service=\.=(.*?);\.;)
+    tagName: destination_canonical_service
+  - regex: (source_canonical_revision=\.=(.*?);\.;)
+    tagName: source_canonical_revision
+  - regex: (destination_canonical_revision=\.=(.*?);\.;)
+    tagName: destination_canonical_revision
+  - regex: (cache\.(.+?)\.)
+    tagName: cache
+  - regex: (component\.(.+?)\.)
+    tagName: component
+  - regex: (tag\.(.+?);\.)
+    tagName: tag
+  - regex: (wasm_filter\.(.+?)\.)
+    tagName: wasm_filter
+  useAllDefaultTags: false
+
+static_resources:
+  listeners:
+  - address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 15006
+    listenerFiltersTimeout: 0s
+    connection_balance_config:
+      exact_balance: { }
+    name: virtualInbound
+    trafficDirection: INBOUND
+    continueOnListenerFiltersTimeout: true
+    listenerFilters:
+    - filterDisabled:
+        destinationPortRange:
+          end: 8081
+          start: 8080
+      name: envoy.filters.listener.http_inspector
+      typedConfig:
+        '@type': type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector
+    filter_chains:
+    - filterChainMatch:
+        transportProtocol: raw_buffer
+      filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          codec_type: AUTO
+          normalize_path: true
+          path_with_escaped_slashes_action: KEEP_UNCHANGED
+          route_config:
+            name: local_route
+            validateClusters: false
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - decorator:
+                  operation: istio-http.backends.svc.cluster.local:80/*
+                match: { prefix: "/" }
+                name: default
+                route:
+                  cluster: upstream
+                  maxStreamDuration:
+                    maxStreamDuration: 0s
+                  timeout: 0s
+          serverName: istio-envoy
+          setCurrentClientCertDetails:
+            dns: true
+            subject: true
+            uri: true
+          statPrefix: inbound_0.0.0.0_8080
+          streamIdleTimeout: 0s
+          upgradeConfigs:
+          - upgradeType: websocket
+          useRemoteAddress: false
+          normalizePath: true
+#          tracing:
+#            clientSampling:
+#              value: 100
+#            customTags:
+#            - metadata:
+#                kind:
+#                  request: {}
+#                metadataKey:
+#                  key: envoy.filters.http.rbac
+#                  path:
+#                  - key: istio_dry_run_allow_shadow_effective_policy_id
+#              tag: istio.authorization.dry_run.allow_policy.name
+#            - metadata:
+#                kind:
+#                  request: {}
+#                metadataKey:
+#                  key: envoy.filters.http.rbac
+#                  path:
+#                  - key: istio_dry_run_allow_shadow_engine_result
+#              tag: istio.authorization.dry_run.allow_policy.result
+#            - metadata:
+#                kind:
+#                  request: {}
+#                metadataKey:
+#                  key: envoy.filters.http.rbac
+#                  path:
+#                  - key: istio_dry_run_deny_shadow_effective_policy_id
+#              tag: istio.authorization.dry_run.deny_policy.name
+#            - metadata:
+#                kind:
+#                  request: {}
+#                metadataKey:
+#                  key: envoy.filters.http.rbac
+#                  path:
+#                  - key: istio_dry_run_deny_shadow_engine_result
+#              tag: istio.authorization.dry_run.deny_policy.result
+#            - literal:
+#                value: latest
+#              tag: istio.canonical_revision
+#            - literal:
+#                value: shell
+#              tag: istio.canonical_service
+#            - literal:
+#                value: cluster.local
+#              tag: istio.mesh_id
+#            - literal:
+#                value: default
+#              tag: istio.namespace
+#            overallSampling:
+#              value: 100
+#            randomSampling: {}
+          forwardClientCertDetails: APPEND_FORWARD
+          http_filters:
+          - name: istio_authn
+            typedConfig:
+              '@type': type.googleapis.com/istio.envoy.config.filter.http.authn.v2alpha1.FilterConfig
+              policy: {}
+              skipValidateTrustDomain: true
+          - name: envoy.filters.http.cors
+            typedConfig:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+          - name: envoy.filters.http.fault
+            typedConfig:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+          - name: envoy.filters.http.router
+            typedConfig:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: upstream
+    circuitBreakers:
+      thresholds:
+      - maxConnections: 4294967295
+        maxPendingRequests: 4294967295
+        maxRequests: 4294967295
+        maxRetries: 4294967295
+    connectTimeout: 10s
+    type: static
+    metadata:
+      filterMetadata:
+        istio:
+          services:
+          - host: istio-http.backends.svc.cluster.local
+            name: istio-http
+            namespace: backends
+    load_assignment:
+      cluster_name: upstream
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8080
+admin:
+  access_log_path: "/dev/null"
+  profile_path: "/tmp/envoy.prof"
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 15000
+

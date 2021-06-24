@@ -109,6 +109,8 @@ func connectEbpf(remote string, sockmap *ebpf.Map, counter *ebpf.Map) {
 	if counter != nil {
 		go func() {
 			start := time.Now()
+			prevTime := time.Now()
+			prev := uint64(0)
 			for {
 				var v uint64
 				err := counter.Lookup(uint64(0), &v)
@@ -117,7 +119,12 @@ func connectEbpf(remote string, sockmap *ebpf.Map, counter *ebpf.Map) {
 					time.Sleep(time.Second)
 					continue
 				}
-				log.Println("Completed request", v, "rate", uint64(float64(v)/time.Since(start).Seconds()), "per second")
+				log.Println("Completed request", v,
+					"rate", uint64(float64(v)/time.Since(start).Seconds()), "per second,",
+					"recent rate", uint64(float64(v - prev)/time.Since(prevTime).Seconds()), "per second",
+				)
+				prev = v
+				prevTime = time.Now()
 				time.Sleep(time.Second)
 			}
 		}()

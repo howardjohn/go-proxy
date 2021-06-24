@@ -1,0 +1,19 @@
+[package]
+name = "hyper-reverse-proxy"
+version = "0.0.3"
+edition = "2018"
+authors = []
+
+[[bin]]
+name = "hyper-reverse-proxy"
+path = "src/main.rs"
+
+[dependencies]
+futures = "0.3.12"
+hyper = { version = "0.14.2", features = ["full"] }
+tokio = {"version"= "1.1.1", features=["rt-multi-thread", "macros"]}
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
